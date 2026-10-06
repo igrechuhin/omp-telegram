@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { publishCommands } from "../src/commands";
+import { BOT_COMMANDS, publishCommands } from "../src/commands";
 import { type Config, loadConfig, paths, saveConfig } from "../src/config";
 import { isRecord } from "../src/guard";
 import { writeOffset } from "../src/state";
@@ -129,7 +129,9 @@ async function main(): Promise<void> {
     console.warn(`⚠ Command menu not registered: ${e instanceof Error ? e.message : String(e)}`);
     return false;
   });
-  if (published) console.log("✓ Command menu registered (/status, /away)");
+  if (published) {
+    console.log(`✓ Command menu registered (${BOT_COMMANDS.map((c) => `/${c.command}`).join(", ")})`);
+  }
 
   const test = await api(botToken, "sendMessage", {
     chat_id: cfg.chatId,
