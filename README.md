@@ -71,6 +71,7 @@ bun scripts/setup.ts --token 123:ABC --chat -1001234567890 --user 4242 --machine
 | Telegram | Message with no reply (private chat only) | Goes to the newest live session |
 | Telegram | `/away [on\|off]` | Toggles away mode for the whole machine |
 | Telegram | `/status` | Machine, away state, poller, allowed users |
+| Telegram | Reply `/exit` to a notification | Ends that session. A bare `/exit` is refused, so the wrong session can't be ended. |
 | omp | `/telegram away [on\|off]` | Same toggle, from the terminal |
 | omp | `/telegram test` | Sends a test message |
 | omp | `/telegram status` | Shows config and whether this session is the poller |

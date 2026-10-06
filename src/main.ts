@@ -10,7 +10,7 @@ import { publishCommands } from "./commands";
 import { type Config, ensureDirs, errMessage, loadConfig, logErr, machineName, paths } from "./config";
 import { sendStopNotification } from "./notify";
 import { fetchUpdates } from "./poller";
-import { type RelayHandlers, routeUpdate } from "./relay";
+import { type RelayHandlers, isExitCommand, routeUpdate } from "./relay";
 import {
   dropInbox,
   heartbeat,
@@ -201,10 +201,20 @@ export default function telegram(pi: PiLike): void {
     }
   }
 
-  function drainInbox(): void {
-    if (!relay || !sessionId) return;
+  /** Set once a remote /exit is accepted, so later drains cannot act on it again. */
+  let exiting = false;
+
+  function drainInbox(): Promise<void> | undefined {
+    if (!relay || !sessionId || exiting) return undefined;
     const { items, commit } = readInbox(sessionId);
-    if (!items.length) return;
+    if (!items.length) return undefined;
+    if (items.some((i) => isExitCommand(i.text))) {
+      // Commit before shutting down: the session ends, so anything else queued
+      // with the /exit is dropped rather than injected into a dying turn.
+      commit();
+      exiting = true;
+      return endFromTelegram().catch((e: unknown) => logErr(`remote exit: ${errMessage(e)}`));
+    }
     // One message per drain: separate prompts started back-to-back would race the idle check.
     const text = items.map((i) => i.text).join("\n\n");
     const busy = ctxRef?.isIdle?.() === false;
@@ -214,6 +224,28 @@ export default function telegram(pi: PiLike): void {
     });
     commit();
     consecutiveRelays = 0;
+    return undefined;
+  }
+
+  async function endFromTelegram(): Promise<void> {
+    const ctx = ctxRef;
+    if (!cfg) return;
+    if (!ctx?.shutdown) {
+      exiting = false;
+      await reply(cfg.chatId, "⚠️ This omp build cannot end a session remotely.");
+      return;
+    }
+    const title = pi.getSessionName?.();
+    await reply(
+      cfg.chatId,
+      `⏹ Ending session${title ? ` <b>${esc(title)}</b>` : ""} on ${esc(machineName(cfg))}.`,
+    );
+    try {
+      await ctx.shutdown();
+    } catch (e) {
+      exiting = false;
+      logErr(`remote exit: ${errMessage(e)}`);
+    }
   }
 
   /**

@@ -9,6 +9,7 @@ import { api } from "./tg";
 export const BOT_COMMANDS: { command: string; description: string }[] = [
   { command: "status", description: "Machine, away mode, poller, allowed users" },
   { command: "away", description: "Questions here instead of the terminal: /away on|off" },
+  { command: "exit", description: "End a session: reply to its notification" },
 ];
 
 /** Changes whenever the published list does, so a stale menu is republished once. */

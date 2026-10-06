@@ -19,6 +19,7 @@ export interface HookCtx {
   setTimeout?(fn: () => unknown, ms: number): unknown;
   clearTimer?(timer: unknown): void;
   isIdle?(): boolean;
+  shutdown?(): unknown;
 }
 
 export interface PiLike {

@@ -19,6 +19,14 @@ export function isAuthorized(cfg: Config, userId: number | undefined): boolean {
 }
 
 /**
+ * `/exit` ends the session that owns the target message. It is routed like a
+ * reply and intercepted by that session, never injected as a prompt.
+ */
+export function isExitCommand(text: string): boolean {
+  return /^\/exit(@\w+)?$/i.test(text.trim());
+}
+
+/**
  * Routes one update to the session that owns it:
  * - a reply follows the message it answers (works in the shared group);
  * - bare text goes to the newest live session, but only in a private chat — in a
@@ -58,6 +66,16 @@ export async function routeUpdate(
       return "reply to unknown message";
     }
   } else {
+    // /exit ends exactly the session you point at. "Newest live session" is a
+    // guess, and a wrong guess here kills someone's work.
+    if (isExitCommand(text)) {
+      await handlers.onUndeliverable(
+        msg.chat_id,
+        msg.message_id,
+        "To end a session, reply /exit to one of its notifications.",
+      );
+      return "bare /exit (reply to a notification instead)";
+    }
     // Private chats have positive ids; groups and channels are negative.
     if (msg.chat_id < 0) return "bare text in group (reply to a notification instead)";
     routing = latestLiveRouting();
@@ -70,7 +88,8 @@ export async function routeUpdate(
     await handlers.onUndeliverable(msg.chat_id, msg.message_id, "That session has ended.");
     return "session ended";
   }
-  if (routing.askId && (await handlers.onAskText(routing.askId, text, update.update_id))) {
+  // Replying /exit to a question ends the session; it is not an answer.
+  if (routing.askId && !isExitCommand(text) && (await handlers.onAskText(routing.askId, text, update.update_id))) {
     return undefined;
   }
   appendInbox(routing.sessionId, {

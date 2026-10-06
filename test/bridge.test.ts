@@ -105,6 +105,7 @@ interface Fake {
   timers: (() => unknown)[];
   sent: string[];
   entries: unknown[];
+  shutdowns: number;
 }
 
 let dir = "";
@@ -142,9 +143,13 @@ function makeSession(id: string): Fake {
       return timers.length;
     },
     isIdle: () => true,
+    shutdown: () => {
+      fake.shutdowns++;
+    },
   };
   telegram(pi);
-  return { ctx, handlers, commands, timers, sent, entries };
+  const fake: Fake = { ctx, handlers, commands, timers, sent, entries, shutdowns: 0 };
+  return fake;
 }
 
 async function emit(s: Fake, event: string, payload: unknown = {}): Promise<unknown> {
@@ -362,6 +367,27 @@ describe("telegram bridge", () => {
     await a.commands.get("telegram")?.("away off", a.ctx);
   });
 
+  test("bare /exit is refused: it must name a session by replying", async () => {
+    reply(11, undefined, "/exit");
+    await polledPast(12);
+    await a.timers[1]();
+    expect(a.shutdowns).toBe(0);
+    expect(lastSendText()).toContain("reply /exit to one of its notifications");
+  });
+
+  test("/exit replied to a notification ends that session, once", async () => {
+    const injected = a.sent.length;
+    reply(12, notificationId, "/exit");
+    await polledPast(13);
+    await a.timers[1]();
+    expect(a.shutdowns).toBe(1);
+    expect(lastSendText()).toContain("Ending session");
+    // Intercepted, never injected as a prompt.
+    expect(a.sent).toHaveLength(injected);
+    await a.timers[1]();
+    expect(a.shutdowns).toBe(1);
+  });
+
   test("leadership hands off on shutdown; replies to ended sessions are refused", async () => {
     b = makeSession("sessB");
     await emit(b, "session_start");
@@ -372,8 +398,8 @@ describe("telegram bridge", () => {
     b.timers[0]();
     expect(readLeader()?.sessionId).toBe("sessB");
 
-    reply(11, notificationId, "are you there?");
-    await polledPast(12);
+    reply(13, notificationId, "are you there?");
+    await polledPast(14);
     expect(lastSendText()).toContain("That session has ended.");
   });
 
@@ -432,7 +458,7 @@ describe("command menu", () => {
     expect(await publishCommands(TOKEN)).toBe(true);
     const published = calls.filter((c) => c.method === "setMyCommands");
     expect(published).toHaveLength(before + 1);
-    expect(commandNames(published.at(-1)?.body.commands)).toEqual(["status", "away"]);
+    expect(commandNames(published.at(-1)?.body.commands)).toEqual(["status", "away", "exit"]);
 
     expect(await publishCommands(TOKEN)).toBe(false);
     expect(calls.filter((c) => c.method === "setMyCommands")).toHaveLength(before + 1);
