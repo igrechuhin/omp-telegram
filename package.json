@@ -1,0 +1,18 @@
+{
+  "name": "omp-telegram",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram bridge for omp sessions: structured stop report, reply-to-continue, ask-as-buttons.",
+  "omp": {
+    "extensions": ["./src/main.ts"]
+  },
+  "scripts": {
+    "setup": "bun scripts/setup.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}
