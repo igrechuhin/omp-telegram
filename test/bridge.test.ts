@@ -487,4 +487,34 @@ describe("configuration after session start", () => {
       rmSync(late, { recursive: true, force: true });
     }
   });
+
+  test("/telegram status activates the relay without waiting for a tick", async () => {
+    const late = mkdtempSync(join(tmpdir(), "omp-tg-cmd-"));
+    const previous = process.env.OMP_TELEGRAM_DIR;
+    process.env.OMP_TELEGRAM_DIR = join(late, "tg");
+    const savedDir = dir;
+    dir = late;
+    try {
+      const c = makeSession("sessCmd");
+      await emit(c, "session_start");
+      expect(readLeader()).toBeUndefined();
+
+      saveConfig({
+        botToken: TOKEN,
+        chatId: String(CHAT),
+        allowedUserIds: [ALLOWED],
+        machineName: "cmdbox",
+        notifyNonInteractive: true,
+      });
+      // Running the command is what a user does when nothing happens; it must
+      // pick up the new config instead of reporting "Not configured".
+      await c.commands.get("telegram")?.("status", c.ctx);
+      expect(readLeader()?.sessionId).toBe("sessCmd");
+      await emit(c, "session_shutdown");
+    } finally {
+      dir = savedDir;
+      process.env.OMP_TELEGRAM_DIR = previous;
+      rmSync(late, { recursive: true, force: true });
+    }
+  });
 });

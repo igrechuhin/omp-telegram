@@ -124,6 +124,11 @@ away flag, and `err.log`.
 | Replies ignored | Your user id is not in `allowedUserIds`, or you sent non-reply text in a group |
 | Two notifications per stop | The legacy `hooks/post/telegram-notify.ts` is still active; setup can disable it |
 | No `/` command menu | Registered at setup and on poller start. Reopen the chat; `err.log` shows `setMyCommands` failures. |
+| Notifications work but commands are ignored | Nothing is polling. Run `/telegram status`: it re-reads the config and starts the poller. `poller: none` after that means the session predates the installed build — restart it. |
+
+A session that started before setup ran activates on its next tick, or immediately
+when you run `/telegram status`. A session running code older than the installed
+build keeps that old code in memory and must be restarted once.
 
 ## Development
 

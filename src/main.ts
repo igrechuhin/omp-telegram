@@ -52,6 +52,8 @@ export default function telegram(pi: PiLike): void {
   let conflictUntil = 0;
   let askRelayedThisTurn = false;
   let consecutiveRelays = 0;
+  /** setInterval is not reversible here, so timers are armed at most once. */
+  let timersArmed = false;
 
   async function reply(chatId: number | string, text: string, replyTo?: number): Promise<void> {
     if (!cfg) return;
@@ -214,6 +216,17 @@ export default function telegram(pi: PiLike): void {
     consecutiveRelays = 0;
   }
 
+  /**
+   * Idempotent: leadership requires a heartbeat, so any path that can activate
+   * the relay must guarantee the timers exist.
+   */
+  function armTimers(ctx: HookCtx): void {
+    if (timersArmed || typeof ctx.setInterval !== "function") return;
+    timersArmed = true;
+    ctx.setInterval(tick, TICK_MS);
+    ctx.setInterval(drainInbox, INBOX_MS);
+  }
+
   function start(ctx: HookCtx): void {
     if (ctx.agent?.kind === "sub") return;
     ctxRef = ctx;
@@ -223,8 +236,7 @@ export default function telegram(pi: PiLike): void {
     // Print/json runs only notify on stop; they never relay, so no timers.
     if (!((mode === "tui" || mode === "rpc") && typeof ctx.setInterval === "function")) return;
     activate();
-    ctx.setInterval?.(tick, TICK_MS);
-    ctx.setInterval?.(drainInbox, INBOX_MS);
+    armTimers(ctx);
     tick();
   }
 
@@ -300,7 +312,19 @@ export default function telegram(pi: PiLike): void {
     handler: async (args, ctx) => {
       const [sub, arg] = args.trim().split(/\s+/);
       const say = (text: string) => ctx.ui?.notify?.(text, "info");
-      const current = cfg ?? loadConfig();
+      // Re-read and store: running setup while this session is open should not
+      // require a restart, and this command is the one path a user reaches for.
+      // Leadership needs a heartbeat, so never activate where timers cannot run.
+      if (!relay && (timersArmed || typeof ctx.setInterval === "function")) {
+        ctxRef ??= ctx;
+        sessionId ||= ctx.sessionManager?.getSessionId?.() ?? `pid${process.pid}`;
+        cfg = loadConfig();
+        if (activate()) {
+          armTimers(ctx);
+          tick();
+        }
+      }
+      const current = cfg;
       if (!current) {
         say(`Not configured. Run: bun <plugin>/scripts/setup.ts  (config: ${paths().config})`);
         return;
@@ -319,7 +343,12 @@ export default function telegram(pi: PiLike): void {
         say(res.ok ? "Test message sent" : `Send failed: ${res.description}`);
         return;
       }
-      say(statusText().replace(/<[^>]+>/g, "") + `\nrelay: ${relay ? "on" : "off"} · leader here: ${leader}`);
+      const poller = leader
+        ? "this session"
+        : readLeader()
+          ? `another session (pid ${readLeader()?.pid})`
+          : "none — restart omp if this persists";
+      say(`${statusText().replace(/<[^>]+>/g, "")}\nrelay: ${relay ? "on" : "off"} · poller: ${poller}`);
     },
   });
 }
