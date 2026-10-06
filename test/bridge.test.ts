@@ -451,3 +451,40 @@ describe("command menu", () => {
     expect([...handled].filter((c) => !listed.has(c))).toEqual([]);
   });
 });
+
+describe("configuration after session start", () => {
+  /**
+   * A session started before setup ran must still relay once the config exists:
+   * `start` used to load config once and return permanently, so commands were
+   * never polled until the session was restarted.
+   */
+  test("a session started without config activates when setup lands", async () => {
+    const late = mkdtempSync(join(tmpdir(), "omp-tg-late-"));
+    const previous = process.env.OMP_TELEGRAM_DIR;
+    process.env.OMP_TELEGRAM_DIR = join(late, "tg");
+    const savedDir = dir;
+    dir = late;
+    try {
+      const c = makeSession("sessLate");
+      await emit(c, "session_start");
+      // No config yet: nothing registered and no leader, but timers are armed.
+      expect(readLeader()).toBeUndefined();
+      expect(c.timers.length).toBeGreaterThan(0);
+
+      saveConfig({
+        botToken: TOKEN,
+        chatId: String(CHAT),
+        allowedUserIds: [ALLOWED],
+        machineName: "latebox",
+        notifyNonInteractive: true,
+      });
+      c.timers[0]();
+      expect(readLeader()?.sessionId).toBe("sessLate");
+      await emit(c, "session_shutdown");
+    } finally {
+      dir = savedDir;
+      process.env.OMP_TELEGRAM_DIR = previous;
+      rmSync(late, { recursive: true, force: true });
+    }
+  });
+});

@@ -152,8 +152,33 @@ export default function telegram(pi: PiLike): void {
     }
   }
 
+  /**
+   * Registers this session for relay once a usable config exists. Returns false
+   * while the plugin is unconfigured, so the caller retries on a later tick.
+   */
+  function activate(): boolean {
+    if (relay) return true;
+    if (!cfg || cfg.allowedUserIds.length === 0 || !ctxRef) return false;
+    relay = true;
+    ensureDirs();
+    registerSession({
+      sessionId,
+      pid: process.pid,
+      cwd: ctxRef.cwd,
+      title: pi.getSessionName?.(),
+      ts: Date.now(),
+    });
+    return true;
+  }
+
   function tick(): void {
-    if (!relay || !cfg) return;
+    if (!relay) {
+      // Setup may have run after this session started. Re-reading here is what
+      // keeps a long-lived session from staying inert until it is restarted.
+      cfg = loadConfig();
+      if (!activate()) return;
+    }
+    if (!cfg) return;
     if (leader) {
       if (!heartbeat(sessionId)) {
         leader = false;
@@ -191,18 +216,13 @@ export default function telegram(pi: PiLike): void {
 
   function start(ctx: HookCtx): void {
     if (ctx.agent?.kind === "sub") return;
-    cfg = loadConfig();
-    if (!cfg) return;
     ctxRef = ctx;
     sessionId = ctx.sessionManager?.getSessionId?.() ?? `pid${process.pid}`;
+    cfg = loadConfig();
     const mode = ctx.mode ?? "tui";
-    relay =
-      (mode === "tui" || mode === "rpc") &&
-      cfg.allowedUserIds.length > 0 &&
-      typeof ctx.setInterval === "function";
-    if (!relay) return;
-    ensureDirs();
-    registerSession({ sessionId, pid: process.pid, cwd: ctx.cwd, title: pi.getSessionName?.(), ts: Date.now() });
+    // Print/json runs only notify on stop; they never relay, so no timers.
+    if (!((mode === "tui" || mode === "rpc") && typeof ctx.setInterval === "function")) return;
+    activate();
     ctx.setInterval?.(tick, TICK_MS);
     ctx.setInterval?.(drainInbox, INBOX_MS);
     tick();
