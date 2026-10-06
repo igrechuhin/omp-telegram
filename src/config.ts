@@ -18,6 +18,8 @@ export interface Paths {
   err: string;
   leader: string;
   offset: string;
+  /** Fingerprint of the command menu last published to Telegram. */
+  commands: string;
   away: string;
   sessions: string;
   routing: string;
@@ -39,6 +41,7 @@ export function paths(): Paths {
     err: join(state, "err.log"),
     leader: join(state, "leader.json"),
     offset: join(state, "offset.json"),
+    commands: join(state, "commands.json"),
     away: join(state, "away.json"),
     sessions: join(state, "sessions"),
     routing: join(state, "routing"),

@@ -78,6 +78,11 @@ bun scripts/setup.ts --token 123:ABC --chat -1001234567890 --user 4242 --machine
 In a group, a message that is not a reply is ignored on purpose: every machine's bot
 would see it and inject it everywhere.
 
+The `/` menu in Telegram is published with `setMyCommands` — at setup, and again
+whenever a session takes the poller role and the list has changed. Telegram clients
+cache it, so a freshly-registered menu can take a few seconds to appear, or a chat
+reopen. With one bot per machine, each bot shows its own menu.
+
 ## Config
 
 `~/.omp/agent/telegram/config.json`, mode `0600`:
@@ -90,8 +95,9 @@ would see it and inject it everywhere.
 | `machineName` | Label in notifications (default: short hostname) |
 | `notifyNonInteractive` | Notify for `-p` / json runs too (default `true`) |
 
-State lives beside it in `state/`: the leader lock, the update offset, per-session
-inboxes, message→session routing, pending asks, away flag, and `err.log`.
+State lives beside it in `state/`: the leader lock, the update offset, the published
+command-menu fingerprint, per-session inboxes, message→session routing, pending asks,
+away flag, and `err.log`.
 
 ## Security
 
@@ -117,6 +123,7 @@ inboxes, message→session routing, pending asks, away flag, and `err.log`.
 | `getUpdates conflict` in `err.log` | Another process polls this bot. Use one bot per machine. |
 | Replies ignored | Your user id is not in `allowedUserIds`, or you sent non-reply text in a group |
 | Two notifications per stop | The legacy `hooks/post/telegram-notify.ts` is still active; setup can disable it |
+| No `/` command menu | Registered at setup and on poller start. Reopen the chat; `err.log` shows `setMyCommands` failures. |
 
 ## Development
 

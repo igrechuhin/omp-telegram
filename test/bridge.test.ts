@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { BOT_COMMANDS, publishCommands } from "../src/commands";
 import { saveConfig } from "../src/config";
 import { isRecord } from "../src/guard";
 import telegram from "../src/main";
@@ -403,5 +404,50 @@ describe("state directory creation", () => {
       process.env.OMP_TELEGRAM_DIR = previous;
       rmSync(fresh, { recursive: true, force: true });
     }
+  });
+});
+
+describe("command menu", () => {
+  /**
+   * Telegram renders the `/` menu only from setMyCommands; handling a command is
+   * not enough. The fingerprint keeps every session start from re-publishing.
+   */
+  function commandNames(sent: unknown): string[] {
+    if (!Array.isArray(sent)) return [];
+    return sent.map((c) => (isRecord(c) && typeof c.command === "string" ? c.command : ""));
+  }
+
+  test("the leader publishes the menu when it takes leadership", () => {
+    // sessA won leadership in beforeAll; publishing is what makes the `/` menu
+    // appear without re-running setup.
+    expect(calls.some((c) => c.method === "setMyCommands")).toBe(true);
+    expect(existsSync(join(dir, "tg", "state", "commands.json"))).toBe(true);
+  });
+
+  test("publishes once, then only when the list changes", async () => {
+    // The leader may already have published during earlier tests; start from a
+    // known state so this asserts the fingerprint logic, not the run order.
+    rmSync(join(dir, "tg", "state", "commands.json"), { force: true });
+    const before = calls.filter((c) => c.method === "setMyCommands").length;
+    expect(await publishCommands(TOKEN)).toBe(true);
+    const published = calls.filter((c) => c.method === "setMyCommands");
+    expect(published).toHaveLength(before + 1);
+    expect(commandNames(published.at(-1)?.body.commands)).toEqual(["status", "away"]);
+
+    expect(await publishCommands(TOKEN)).toBe(false);
+    expect(calls.filter((c) => c.method === "setMyCommands")).toHaveLength(before + 1);
+
+    expect(await publishCommands(TOKEN, true)).toBe(true);
+    expect(calls.filter((c) => c.method === "setMyCommands")).toHaveLength(before + 2);
+  });
+
+  test("every command the bot answers is in the published menu", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "main.ts"), "utf8");
+    const handled = new Set<string>();
+    for (const m of source.matchAll(/cmd === "\/(\w+)"/g)) handled.add(m[1] ?? "");
+    // /start is Telegram's own entry point and is deliberately not listed.
+    handled.delete("start");
+    const listed = new Set(BOT_COMMANDS.map((c) => c.command));
+    expect([...handled].filter((c) => !listed.has(c))).toEqual([]);
   });
 });

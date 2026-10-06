@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { publishCommands } from "../src/commands";
 import { type Config, loadConfig, paths, saveConfig } from "../src/config";
 import { isRecord } from "../src/guard";
 import { writeOffset } from "../src/state";
@@ -123,6 +124,12 @@ async function main(): Promise<void> {
   };
   saveConfig(cfg);
   console.log(`✓ Config written: ${paths().config} (0600)`);
+
+  const published = await publishCommands(botToken, true).catch((e: unknown) => {
+    console.warn(`⚠ Command menu not registered: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  });
+  if (published) console.log("✓ Command menu registered (/status, /away)");
 
   const test = await api(botToken, "sendMessage", {
     chat_id: cfg.chatId,

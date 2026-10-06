@@ -6,6 +6,7 @@ import {
   handleAskText,
   pendingOf,
 } from "./ask";
+import { publishCommands } from "./commands";
 import { type Config, ensureDirs, errMessage, loadConfig, logErr, machineName, paths } from "./config";
 import { sendStopNotification } from "./notify";
 import { fetchUpdates } from "./poller";
@@ -164,6 +165,11 @@ export default function telegram(pi: PiLike): void {
     if (tryAcquireLeader(sessionId)) {
       leader = true;
       pruneRouting();
+      // Only the leader publishes: one call per machine, and only when the
+      // list actually changed. A failure here must not cost leadership.
+      void publishCommands(cfg.botToken).catch((e: unknown) =>
+        logErr(`setMyCommands: ${errMessage(e)}`),
+      );
       void pollLoop();
     }
   }
