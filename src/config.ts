@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isRecord } from "./guard";
 
 export interface Paths {
@@ -106,7 +106,6 @@ export function loadConfig(): Config | null {
 }
 
 export function saveConfig(cfg: Config): void {
-  mkdirSync(paths().root, { recursive: true, mode: 0o700 });
   writeJsonAtomic(paths().config, cfg);
   chmodSync(paths().config, 0o600);
 }
@@ -115,7 +114,9 @@ export function machineName(cfg: Config | null): string {
   return cfg?.machineName || hostname().split(".")[0];
 }
 
+/** Creates the parent directory, so callers need no ordering against `ensureDirs`. */
 export function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
   renameSync(tmp, path);

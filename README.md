@@ -50,12 +50,14 @@ server, no webhook.
    bun ~/.omp/plugins/node_modules/omp-telegram/scripts/setup.ts
    ```
    It verifies the token, asks you to send `/start` (in the group: `/start@yourbot`),
-   learns your user id and chat id, writes `~/.omp/agent/telegram/config.json` with
-   mode `0600`, sends a test message, and offers to disable the older
-   `hooks/post/telegram-notify.ts` hook.
+   then **shows whose `/start` it saw — username, name, and user id — and waits for you
+   to confirm it is you** before that id becomes the allowlist. It writes
+   `~/.omp/agent/telegram/config.json` with mode `0600`, sends a test message, and
+   offers to disable the older `hooks/post/telegram-notify.ts` hook.
 5. **Restart omp.**
 
-Non-interactive (for a second machine you have already set up once):
+Non-interactive (for a second machine you have already set up once). `--user` is
+required here: `--yes` deliberately refuses to auto-accept a discovered identity.
 
 ```bash
 bun scripts/setup.ts --token 123:ABC --chat -1001234567890 --user 4242 --machine intel --yes
@@ -93,9 +95,16 @@ inboxes, message→session routing, pending asks, away flag, and `err.log`.
 
 ## Security
 
-- Only `allowedUserIds` can inject text. Everything else is logged and dropped.
-  Telegram text becomes a prompt for an agent that can run shell commands, so treat
-  that list as a credential.
+- **Identity is the allowlist.** Every message and every button tap is checked against
+  `allowedUserIds` before anything is injected; an empty list denies everyone. Telegram
+  text becomes a prompt for an agent that can run shell commands, so treat that list
+  as a credential.
+- Setup never adopts an id silently: it prints who sent the `/start` and asks you to
+  confirm, because in a shared group anyone could send one first.
+- Check the current list any time with `/telegram status`, or read
+  `allowedUserIds` in `~/.omp/agent/telegram/config.json`.
+- Unauthorized senders get **no reply at all** — the drop is written to `err.log`, so
+  the bot never confirms to a stranger that it is listening.
 - The token is never written to `err.log`.
 - Replies reach a session only while its process is alive; otherwise Telegram gets
   "that session has ended".

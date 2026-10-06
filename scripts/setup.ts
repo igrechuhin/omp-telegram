@@ -64,11 +64,25 @@ async function discover(token: string, botName: string): Promise<{ chatId: strin
       // Acknowledge so the plugin's poller does not see this /start again.
       await api(token, "getUpdates", { offset, timeout: 0 });
       writeOffset(offset);
-      console.log(`✓ Got /start from user ${msg.from.id}${msg.from.username ? ` (@${msg.from.username})` : ""} in chat ${msg.chat_id}`);
+      const who = msg.from.username ? `@${msg.from.username}` : `user ${msg.from.id}`;
+      const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ");
+      console.log(
+        `\n/start from ${who}${name ? ` (${name})` : ""}, id ${msg.from.id}, chat ${msg.chat_id}`,
+      );
+      // In a shared group anyone can send /start first, so the id that gains
+      // control of this machine's agent is confirmed before it is written.
+      // `--yes` must not auto-accept it; non-interactive runs pass --user.
+      const mine = yes
+        ? fail("Discovery needs confirmation; pass --chat and --user for non-interactive setup.")
+        : await confirm("Is that you? Only this id will be able to drive the agent");
+      if (!mine) {
+        console.log("Ignored. Still waiting — send /start yourself.");
+        continue;
+      }
       return { chatId: String(msg.chat_id), userId: msg.from.id };
     }
   }
-  fail("No /start received in time. Re-run setup.");
+  fail("No /start confirmed in time. Re-run setup.");
 }
 
 async function main(): Promise<void> {

@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { saveConfig } from "../src/config";
 import { isRecord } from "../src/guard";
 import telegram from "../src/main";
-import { readLeader } from "../src/state";
+import { readLeader, readOffset, writeOffset } from "../src/state";
 import type { HookCtx, PiLike } from "../src/types";
 
 /**
@@ -281,18 +281,24 @@ describe("telegram bridge", () => {
     expect(a.sent).toEqual(["[via Telegram] also update the README"]);
   });
 
-  test("messages from other users never reach the session", async () => {
+  test("messages from other users never reach the session and get no reply", async () => {
+    const before = sends().length;
     reply(2, notificationId, "rm -rf ~", 999);
-    await polledPast(3);
+    // A stranger's command must not be answered either: a reply would confirm
+    // to them that this bot is live and listening. Ids stay in sequence so the
+    // later tests' updates are still delivered.
+    reply(3, undefined, "/status", 999);
+    await polledPast(4);
     a.timers[1]();
     expect(a.sent).toHaveLength(1);
+    expect(sends().length).toBe(before);
     expect(readFileSync(join(dir, "tg", "state", "err.log"), "utf8")).toContain("unauthorized");
   });
 
   test("bare text routes only in a private chat", async () => {
-    reply(3, undefined, "group noise", ALLOWED, -100123);
-    reply(4, undefined, "private hello");
-    await polledPast(5);
+    reply(4, undefined, "group noise", ALLOWED, -100123);
+    reply(5, undefined, "private hello");
+    await polledPast(6);
     a.timers[1]();
     expect(a.sent.at(-1)).toBe("[via Telegram] private hello");
     expect(a.sent.join("\n")).not.toContain("group noise");
@@ -333,24 +339,24 @@ describe("telegram bridge", () => {
     await emit(a, "session_stop");
     expect(sends().length).toBe(before);
 
-    tap(5, first[1], askMessage);
-    await polledPast(6);
+    tap(6, first[1], askMessage);
+    await polledPast(7);
     const secondMessage = lastMessageId;
     const second = keyboardData(sends().at(-1)?.body);
     expect(second).toHaveLength(4);
     expect(second[3]).toMatch(/^d:/);
 
-    tap(6, second[0], secondMessage);
-    tap(7, second[2], secondMessage);
-    tap(8, second[3], secondMessage);
-    await polledPast(9);
+    tap(7, second[0], secondMessage);
+    tap(8, second[2], secondMessage);
+    tap(9, second[3], secondMessage);
+    await polledPast(10);
     a.timers[1]();
     const answer = a.sent.at(-1) ?? "";
     expect(answer).toContain("Which database? → Postgres");
     expect(answer).toContain("Extras? → Redis, S3");
 
-    tap(9, first[1], askMessage);
-    await polledPast(10);
+    tap(10, first[1], askMessage);
+    await polledPast(11);
     expect(sends("answerCallbackQuery").at(-1)?.body.text).toBe("Already answered.");
     await a.commands.get("telegram")?.("away off", a.ctx);
   });
@@ -365,8 +371,8 @@ describe("telegram bridge", () => {
     b.timers[0]();
     expect(readLeader()?.sessionId).toBe("sessB");
 
-    reply(10, notificationId, "are you there?");
-    await polledPast(11);
+    reply(11, notificationId, "are you there?");
+    await polledPast(12);
     expect(lastSendText()).toContain("That session has ended.");
   });
 
@@ -377,5 +383,25 @@ describe("telegram bridge", () => {
     await gone;
     conflict = false;
     expect(readFileSync(join(dir, "tg", "state", "err.log"), "utf8")).toContain("getUpdates conflict");
+  });
+});
+
+describe("state directory creation", () => {
+  /**
+   * Setup writes the Telegram offset before any session has run `ensureDirs`, so
+   * an atomic write whose parent is missing crashed setup with ENOENT.
+   */
+  test("writeOffset creates state/ when nothing has run before it", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "omp-tg-fresh-"));
+    const previous = process.env.OMP_TELEGRAM_DIR;
+    process.env.OMP_TELEGRAM_DIR = join(fresh, "telegram");
+    try {
+      expect(existsSync(join(fresh, "telegram", "state"))).toBe(false);
+      writeOffset(77);
+      expect(readOffset()).toBe(77);
+    } finally {
+      process.env.OMP_TELEGRAM_DIR = previous;
+      rmSync(fresh, { recursive: true, force: true });
+    }
   });
 });

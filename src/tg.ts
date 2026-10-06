@@ -11,6 +11,8 @@ export interface TgResult {
 export interface TgUser {
   id: number;
   username?: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 export interface TgMessage {
@@ -51,7 +53,13 @@ export function redact(text: string, token: string): string {
 
 function asUser(value: unknown): TgUser | undefined {
   if (!isRecord(value) || typeof value.id !== "number") return undefined;
-  return { id: value.id, username: typeof value.username === "string" ? value.username : undefined };
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  return {
+    id: value.id,
+    username: str(value.username),
+    first_name: str(value.first_name),
+    last_name: str(value.last_name),
+  };
 }
 
 export function asMessage(value: unknown): TgMessage | undefined {
