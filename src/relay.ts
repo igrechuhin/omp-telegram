@@ -1,5 +1,5 @@
 import type { Config } from "./config";
-import { type RoutingRecord, appendInbox, latestLiveRouting, liveSession, resolveRouting } from "./state";
+import { appendInbox, listSessions, liveSession, resolveRouting } from "./state";
 import type { TgCallbackQuery, TgUpdate } from "./tg";
 
 export interface RelayHandlers {
@@ -54,9 +54,10 @@ export async function routeUpdate(
   if (!isAuthorized(cfg, msg.from?.id)) return "message from unauthorized user";
   if (text.startsWith("/") && (await handlers.onCommand(text, msg.chat_id))) return undefined;
 
-  let routing: RoutingRecord | undefined;
+  let sessionId: string;
+  let askId: string | undefined;
   if (msg.reply_to_message_id !== undefined) {
-    routing = resolveRouting(msg.reply_to_message_id);
+    const routing = resolveRouting(msg.reply_to_message_id);
     if (!routing) {
       await handlers.onUndeliverable(
         msg.chat_id,
@@ -65,6 +66,14 @@ export async function routeUpdate(
       );
       return "reply to unknown message";
     }
+    // A reply follows the message it answers, so an ended session cannot receive
+    // it; "newest live" would answer the wrong one.
+    if (!liveSession(routing.sessionId)) {
+      await handlers.onUndeliverable(msg.chat_id, msg.message_id, "That session has ended.");
+      return "session ended";
+    }
+    sessionId = routing.sessionId;
+    askId = routing.askId;
   } else {
     // /exit ends exactly the session you point at. "Newest live session" is a
     // guess, and a wrong guess here kills someone's work.
@@ -78,21 +87,20 @@ export async function routeUpdate(
     }
     // Private chats have positive ids; groups and channels are negative.
     if (msg.chat_id < 0) return "bare text in group (reply to a notification instead)";
-    routing = latestLiveRouting();
-    if (!routing) {
+    // `listSessions` drops dead pids and ranks newest first, so the newest live
+    // session is reachable even before it has sent a notification of its own.
+    const newest = listSessions()[0];
+    if (!newest) {
       await handlers.onUndeliverable(msg.chat_id, msg.message_id, "No running session on this machine.");
       return "no routing target";
     }
-  }
-  if (!liveSession(routing.sessionId)) {
-    await handlers.onUndeliverable(msg.chat_id, msg.message_id, "That session has ended.");
-    return "session ended";
+    sessionId = newest.sessionId;
   }
   // Replying /exit to a question ends the session; it is not an answer.
-  if (routing.askId && !isExitCommand(text) && (await handlers.onAskText(routing.askId, text, update.update_id))) {
+  if (askId && !isExitCommand(text) && (await handlers.onAskText(askId, text, update.update_id))) {
     return undefined;
   }
-  appendInbox(routing.sessionId, {
+  appendInbox(sessionId, {
     updateId: update.update_id,
     text,
     fromId: msg.from?.id ?? 0,

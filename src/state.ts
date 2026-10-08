@@ -215,21 +215,6 @@ export function resolveRouting(messageId: number): RoutingRecord | undefined {
   return parseRouting(readJson(stateFile.routing(messageId)));
 }
 
-/** Newest notification whose session is still running: target for bare (non-reply) text. */
-export function latestLiveRouting(): RoutingRecord | undefined {
-  let names: string[] = [];
-  try {
-    names = readdirSync(paths().routing).filter((n) => n.endsWith(".json"));
-  } catch {
-    return undefined;
-  }
-  const records = names
-    .map((n) => parseRouting(readJson(join(paths().routing, n))))
-    .filter((r): r is RoutingRecord => r !== undefined)
-    .sort((a, b) => b.ts - a.ts);
-  return records.find((r) => liveSession(r.sessionId) !== undefined);
-}
-
 export function pruneRouting(now = Date.now()): void {
   let names: string[] = [];
   try {
