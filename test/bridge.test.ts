@@ -3,11 +3,19 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { BOT_COMMANDS, publishCommands } from "../src/commands";
-import { saveConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
 import { isRecord } from "../src/guard";
+import { ESCALATED_TEXT, askWithEscalation } from "../src/escalate";
 import telegram from "../src/main";
 import { readLeader, readOffset, writeOffset } from "../src/state";
-import type { HookCtx, PiLike } from "../src/types";
+import type {
+  HookCtx,
+  PiLike,
+  SchemaLike,
+  ToolCtx,
+  ToolDefinitionLike,
+  ToolResult,
+} from "../src/types";
 
 /**
  * Drives the real extension against a mock Telegram Bot API. Extension timers are
@@ -102,6 +110,7 @@ interface Fake {
   ctx: HookCtx;
   handlers: Map<string, Handler>;
   commands: Map<string, (args: string, ctx: HookCtx) => unknown>;
+  tools: Map<string, ToolDefinitionLike>;
   timers: (() => unknown)[];
   sent: string[];
   entries: unknown[];
@@ -113,6 +122,7 @@ let dir = "";
 function makeSession(id: string): Fake {
   const handlers = new Map<string, Handler>();
   const commands = new Map<string, (args: string, ctx: HookCtx) => unknown>();
+  const tools = new Map<string, ToolDefinitionLike>();
   const timers: (() => unknown)[] = [];
   const sent: string[] = [];
   const entries: unknown[] = [];
@@ -120,6 +130,14 @@ function makeSession(id: string): Fake {
     on(event, handler) {
       handlers.set(event, handler as Handler);
     },
+    registerTool(definition) {
+      tools.set(definition.name, definition);
+    },
+    // Only the chainable shape matters here: the host validates for real.
+    zod: (() => {
+      const schema: SchemaLike = { optional: () => schema, describe: () => schema };
+      return { object: () => schema, array: () => schema, string: () => schema, number: () => schema, boolean: () => schema };
+    })(),
     registerCommand(name, opts) {
       commands.set(name, opts.handler);
     },
@@ -148,7 +166,7 @@ function makeSession(id: string): Fake {
     },
   };
   telegram(pi);
-  const fake: Fake = { ctx, handlers, commands, timers, sent, entries, shutdowns: 0 };
+  const fake: Fake = { ctx, handlers, commands, tools, timers, sent, entries, shutdowns: 0 };
   return fake;
 }
 
@@ -542,5 +560,380 @@ describe("configuration after session start", () => {
       process.env.OMP_TELEGRAM_DIR = previous;
       rmSync(late, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ask timeout escalation", () => {
+  /**
+   * `askWithEscalation` owns the race between the terminal dialog and the relay.
+   * These drive it directly: the dialog is `ctx.invokeTool`, so a test controls
+   * exactly when (and whether) the user answers.
+   */
+
+  const QUESTIONS = {
+    questions: [{ id: "db", question: "Which database?", options: [{ label: "SQLite" }] }],
+  };
+
+  function answered(text: string): ToolResult {
+    return { content: [{ type: "text", text }] };
+  }
+
+  /** A dialog that never resolves until aborted, like an unwatched terminal. */
+  function unwatchedDialog(): { ctx: ToolCtx; aborted: () => boolean } {
+    let seen: AbortSignal | undefined;
+    return {
+      aborted: () => seen?.aborted === true,
+      ctx: {
+        invokeTool: (_params, options) =>
+          new Promise((_resolve, reject) => {
+            seen = options?.signal;
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      },
+    };
+  }
+
+  test("a terminal answer wins and is returned verbatim, with no relay", async () => {
+    let relays = 0;
+    const result = await askWithEscalation(
+      QUESTIONS,
+      undefined,
+      undefined,
+      { invokeTool: async () => answered("SQLite") },
+      {
+        escalateMs: () => 10,
+        escalate: async () => {
+          relays++;
+          return true;
+        },
+      },
+    );
+    expect(result.content[0].text).toBe("SQLite");
+    expect(relays).toBe(0);
+  });
+
+  test("an unanswered dialog is aborted and the question is relayed", async () => {
+    const dialog = unwatchedDialog();
+    let relayed: unknown;
+    const result = await askWithEscalation(QUESTIONS, undefined, undefined, dialog.ctx, {
+      escalateMs: () => 5,
+      escalate: async (input) => {
+        relayed = input;
+        return true;
+      },
+    });
+    expect(result.content[0].text).toBe(ESCALATED_TEXT);
+    expect(isRecord(result.details) && result.details.escalated).toBe(true);
+    // The losing channel must be destroyed, or it could answer later too.
+    expect(dialog.aborted()).toBe(true);
+    expect(relayed).toEqual(QUESTIONS);
+  });
+
+  test("an undeliverable relay reopens the dialog instead of losing the question", async () => {
+    let opened = 0;
+    const result = await askWithEscalation(
+      QUESTIONS,
+      undefined,
+      undefined,
+      {
+        invokeTool: (_params, options) => {
+          opened++;
+          // First open: never answered, so escalation fires. Second: answered.
+          if (opened > 1) return Promise.resolve(answered("SQLite"));
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        },
+      },
+      { escalateMs: () => 5, escalate: async () => false },
+    );
+    expect(result.content[0].text).toBe("SQLite");
+    expect(opened).toBe(2);
+  });
+
+  test("escalateMs 0 passes straight through to the native dialog", async () => {
+    let passedSignal: AbortSignal | undefined;
+    const outer = new AbortController();
+    const result = await askWithEscalation(
+      QUESTIONS,
+      outer.signal,
+      undefined,
+      {
+        invokeTool: async (_params, options) => {
+          passedSignal = options?.signal;
+          return answered("SQLite");
+        },
+      },
+      {
+        escalateMs: () => 0,
+        escalate: async () => true,
+      },
+    );
+    expect(result.content[0].text).toBe("SQLite");
+    // No wrapper controller: the host's own signal reaches the dialog untouched.
+    expect(passedSignal).toBe(outer.signal);
+  });
+
+  test("an interrupt surfaces the host's cancellation rather than relaying", async () => {
+    const outer = new AbortController();
+    const dialog = unwatchedDialog();
+    let relays = 0;
+    const pending = askWithEscalation(QUESTIONS, outer.signal, undefined, dialog.ctx, {
+      escalateMs: () => 10_000,
+      escalate: async () => {
+        relays++;
+        return true;
+      },
+    });
+    outer.abort(new Error("user interrupted"));
+    await expect(pending).rejects.toThrow("aborted");
+    expect(relays).toBe(0);
+  });
+
+
+  test("an answer landing as the dialog is aborted still wins over the relay", async () => {
+    let relays = 0;
+    const result = await askWithEscalation(
+      QUESTIONS,
+      undefined,
+      undefined,
+      {
+        // Resolves *because* of the abort: the user committed in the instant between
+        // the deadline firing and the cancellation landing.
+        invokeTool: (_params, options) =>
+          new Promise((resolve) => {
+            options?.signal?.addEventListener("abort", () => resolve(answered("SQLite")), { once: true });
+          }),
+      },
+      {
+        escalateMs: () => 5,
+        escalate: async () => {
+          relays++;
+          return true;
+        },
+      },
+    );
+    // Both channels must never be live: a delivered answer cancels the relay.
+    expect(result.content[0].text).toBe("SQLite");
+    expect(relays).toBe(0);
+  });
+
+
+  test("a signal already aborted before the call never opens a live dialog", async () => {
+    const outer = new AbortController();
+    outer.abort(new Error("interrupted before ask"));
+    let sawAborted: boolean | undefined;
+    let relays = 0;
+    // `addEventListener` never fires for an already-aborted signal, so without the
+    // pre-check the dialog would run uncancelled and this call could never settle.
+    await expect(
+      askWithEscalation(
+        QUESTIONS,
+        outer.signal,
+        undefined,
+        {
+          invokeTool: (_params, options) => {
+            sawAborted = options?.signal?.aborted;
+            return Promise.reject(new Error("Ask input was cancelled"));
+          },
+        },
+        {
+          escalateMs: () => 5,
+          escalate: async () => {
+            relays++;
+            return true;
+          },
+        },
+      ),
+    ).rejects.toThrow("Ask input was cancelled");
+    expect(sawAborted).toBe(true);
+    expect(relays).toBe(0);
+  });
+
+  test("a session with no prompt surface reports that ask is unavailable", async () => {
+    await expect(
+      askWithEscalation(QUESTIONS, undefined, undefined, {}, { escalateMs: () => 5, escalate: async () => true }),
+    ).rejects.toThrow("no interactive prompt surface");
+  });
+
+  test("a cancelled dialog propagates the cancellation instead of relaying", async () => {
+    let relays = 0;
+    await expect(
+      askWithEscalation(
+        QUESTIONS,
+        undefined,
+        undefined,
+        { invokeTool: () => Promise.reject(new Error("Ask tool was cancelled by the user")) },
+        {
+          escalateMs: () => 10_000,
+          escalate: async () => {
+            relays++;
+            return true;
+          },
+        },
+      ),
+    ).rejects.toThrow("cancelled by the user");
+    // Declining to answer is an answer: it must not reroute the question.
+    expect(relays).toBe(0);
+  });
+
+  test("an interrupt inside the escalation window propagates instead of relaying", async () => {
+    const outer = new AbortController();
+    let relays = 0;
+    // Ordering, without depending on which of two timers fires first:
+    //   1. the dialog opens and never settles on its own;
+    //   2. the interrupt aborts it, which the dialog observes but does not act on;
+    //   3. the 1ms deadline therefore wins the race with `signal.aborted` already true;
+    //   4. only then is the dialog allowed to reject.
+    const gate = Promise.withResolvers<void>();
+    const observed = Promise.withResolvers<void>();
+    const pending = askWithEscalation(
+      QUESTIONS,
+      outer.signal,
+      undefined,
+      {
+        invokeTool: (_params, options) => {
+          options?.signal?.addEventListener("abort", () => observed.resolve(), { once: true });
+          return gate.promise.then(() => {
+            throw new Error("Ask input was cancelled");
+          });
+        },
+      },
+      {
+        escalateMs: () => 1,
+        escalate: async () => {
+          relays++;
+          return true;
+        },
+      },
+    );
+    outer.abort(new Error("user interrupted"));
+    // Bounded: if abort propagation regressed, this fails fast instead of hanging.
+    await Promise.race([
+      observed.promise,
+      new Promise((_r, reject) => setTimeout(() => reject(new Error("dialog never observed the abort")), 2_000)),
+    ]);
+    // Outlasts the 1ms deadline by two orders of magnitude, so it has certainly fired
+    // while the dialog was still held open.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    gate.resolve();
+    await expect(pending).rejects.toThrow("Ask input was cancelled");
+    // The interrupt is not an unanswered question: it must never reach Telegram.
+    expect(relays).toBe(0);
+  });
+});
+
+describe("escalation wiring", () => {
+  /**
+   * Covers what the unit tests cannot: that `/telegram escalate` registers the
+   * shadowing tool on a session whose relay is already active, that the registered
+   * tool actually relays through Telegram, and that the schema accepts every field
+   * the native tool accepts.
+   */
+  test("/telegram escalate arms the tool, which then relays a stalled question", async () => {
+    expect(a.tools.has("ask")).toBe(false);
+    // `a` already relays, so this exercises the path that skips re-activation.
+    await a.commands.get("telegram")?.("escalate 0.01", a.ctx);
+    const tool = a.tools.get("ask");
+    expect(tool).toBeDefined();
+    if (!tool) return;
+    expect(tool.approval).toBe("read");
+    expect(tool.concurrency).toBe("exclusive");
+
+    const before = sends().length;
+    const result = await tool.execute(
+      "call-1",
+      {
+        questions: [
+          {
+            id: "db",
+            question: "Which database?",
+            header: "Storage",
+            recommended: 0,
+            options: [
+              { label: "SQLite", description: "file-backed" },
+              // `preview` is accepted for native parity even though Telegram drops it.
+              { label: "Postgres", preview: "server" },
+            ],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      {
+        invokeTool: (_params, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      },
+    );
+
+    expect(result.content[0].text).toBe(ESCALATED_TEXT);
+    expect(sends().length).toBe(before + 1);
+    const relayed = sends().at(-1);
+    expect(relayed?.body.text).toContain("Which database?");
+    // Escalation is not away mode: no 🌙 chip, but the buttons are there.
+    expect(relayed?.body.text).not.toContain("🌙 away");
+    expect(keyboardData(relayed?.body)).toHaveLength(2);
+
+    // The relay replaces the end-of-turn ping, exactly as away mode does.
+    const afterRelay = sends().length;
+    await emit(a, "session_stop");
+    expect(sends().length).toBe(afterRelay);
+
+    await a.commands.get("telegram")?.("escalate off", a.ctx);
+    expect(loadConfig()?.askEscalateMs).toBeUndefined();
+    // Disarmed: the tool stays registered but now passes straight through.
+    const passthrough = await tool.execute("call-2", { questions: [] }, undefined, undefined, {
+      invokeTool: async () => ({ content: [{ type: "text" as const, text: "native" }] }),
+    });
+    expect(passthrough.content[0].text).toBe("native");
+  });
+
+  test("an escalated multi-select question relays toggles and answers back", async () => {
+    await a.commands.get("telegram")?.("escalate 0.01", a.ctx);
+    const tool = a.tools.get("ask");
+    expect(tool).toBeDefined();
+    if (!tool) return;
+
+    const result = await tool.execute(
+      "call-multi",
+      {
+        questions: [
+          {
+            id: "extras",
+            question: "Extras?",
+            multi: true,
+            options: [{ label: "Redis" }, { label: "Kafka" }, { label: "S3" }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      {
+        invokeTool: (_params, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      },
+    );
+    expect(result.content[0].text).toBe(ESCALATED_TEXT);
+
+    const askMessage = lastMessageId;
+    const buttons = keyboardData(sends().at(-1)?.body);
+    // Three toggles plus Done, and toggles use `t:` rather than the single-select `a:`.
+    expect(buttons).toHaveLength(4);
+    expect(buttons[0]).toMatch(/^t:[a-z0-9]+:0:0$/);
+    expect(buttons[3]).toMatch(/^d:/);
+    expect(sends().at(-1)?.body.text).toContain("Toggle options, then ✅ Done");
+
+    tap(90, buttons[0], askMessage);
+    tap(91, buttons[2], askMessage);
+    tap(92, buttons[3], askMessage);
+    await polledPast(93);
+    a.timers[1]();
+    expect(a.sent.at(-1) ?? "").toContain("Extras? → Redis, S3");
+
+    await a.commands.get("telegram")?.("escalate off", a.ctx);
   });
 });

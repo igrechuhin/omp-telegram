@@ -78,6 +78,8 @@ export interface Config {
   machineName?: string;
   /** Notify for print/json/rpc runs too. Default true, matching the old hook. */
   notifyNonInteractive?: boolean;
+  /** Milliseconds an `ask` waits in the terminal before relaying to Telegram. 0 disables. */
+  askEscalateMs?: number;
 }
 
 export function ensureDirs(): void {
@@ -95,12 +97,14 @@ export function parseConfig(raw: unknown): Config | null {
   const allowedUserIds = Array.isArray(raw.allowedUserIds)
     ? raw.allowedUserIds.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
     : [];
+  const escalateMs = Number(raw.askEscalateMs);
   return {
     botToken,
     chatId: String(chatId),
     allowedUserIds,
     machineName: typeof raw.machineName === "string" && raw.machineName ? raw.machineName : undefined,
     notifyNonInteractive: raw.notifyNonInteractive !== false,
+    askEscalateMs: Number.isSafeInteger(escalateMs) && escalateMs > 0 ? escalateMs : undefined,
   };
 }
 

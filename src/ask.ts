@@ -1,8 +1,9 @@
 import type { Config } from "./config";
 import { type PendingQuestion, questionKeyboard, renderQuestion } from "./format";
+import { sendStopNotification } from "./notify";
 import { type AskRecord, appendInbox, loadAsk, recordRouting, saveAsk } from "./state";
 import { type TgCallbackQuery, api, asMessageId, logTgFailure } from "./tg";
-import { asQuestions } from "./types";
+import { type HookCtx, type PiLike, asQuestions } from "./types";
 
 /**
  * After this many relayed asks in a row without a delivered answer, the next `ask`
@@ -46,6 +47,42 @@ export function pendingOf(rec: AskRecord): PendingQuestion {
 export function formatAnswers(rec: AskRecord): string {
   const lines = rec.questions.map((q, i) => `- ${q.question} → ${rec.answers[i] ?? "(no answer)"}`);
   return `Answers to your question${rec.questions.length > 1 ? "s" : ""}:\n${lines.join("\n")}`;
+}
+
+export interface RelayArgs {
+  pi: PiLike;
+  ctx: HookCtx;
+  cfg: Config;
+  sessionId: string;
+  /** Marks the report with the 🌙 chip. True for `away`, false for timeout escalation. */
+  away: boolean;
+  /** Raw `ask` tool input. */
+  input: unknown;
+}
+
+/**
+ * Sends one `ask` to Telegram as an inline-button question and records it, so a reply
+ * or button tap routes back to this session.
+ *
+ * Returns undefined when the question could not be delivered; every caller then leaves
+ * the question with the terminal rather than losing it.
+ */
+export async function relayAsk(args: RelayArgs): Promise<AskRecord | undefined> {
+  const rec = createAsk(args.sessionId, args.input);
+  if (!rec) return undefined;
+  const messageId = await sendStopNotification({
+    pi: args.pi,
+    ctx: args.ctx,
+    cfg: args.cfg,
+    sessionId: args.sessionId,
+    away: args.away,
+    pending: pendingOf(rec),
+    last: { text: "", kind: "done" },
+  });
+  if (messageId === undefined) return undefined;
+  const saved = { ...rec, messageId };
+  saveAsk(saved);
+  return saved;
 }
 
 /**

@@ -23,6 +23,11 @@ Reply to this message to continue the session.
 - **Questions as buttons.** With away mode on, an `ask` call is sent to Telegram with
   one button per option instead of opening the terminal dialog. The agent ends its
   turn and resumes when you answer.
+- **Timeout escalation.** Off by default. Set `/telegram escalate <seconds>` and an
+  `ask` opens in the terminal as usual, moving to Telegram only once it has gone
+  unanswered for that long. The terminal dialog is cancelled when it does, so only
+  one channel can answer. If Telegram is unreachable the dialog reopens, so a
+  question is never lost. `escalate off` disables it.
 - **One reader per machine.** Sessions elect a leader through a lock file; only the
   leader polls Telegram. Leadership moves automatically when that session exits.
 
@@ -73,6 +78,7 @@ bun scripts/setup.ts --token 123:ABC --chat -1001234567890 --user 4242 --machine
 | Telegram | `/status` | Machine, away state, poller, allowed users |
 | Telegram | Reply `/exit` to a notification | Ends that session. A bare `/exit` is refused, so the wrong session can't be ended. |
 | omp | `/telegram away [on\|off]` | Same toggle, from the terminal |
+| omp | `/telegram escalate <seconds\|off>` | Relays an `ask` left unanswered for that long. `off` disables it. |
 | omp | `/telegram test` | Sends a test message |
 | omp | `/telegram status` | Shows config and whether this session is the poller |
 

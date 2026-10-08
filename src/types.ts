@@ -22,6 +22,61 @@ export interface HookCtx {
   shutdown?(): unknown;
 }
 
+/** Minimal view of the omptype/zod schema builder exposed as `pi.zod`. */
+export interface SchemaLike {
+  optional(): SchemaLike;
+  describe(text: string): SchemaLike;
+}
+
+export interface ZodLike {
+  object(shape: Record<string, SchemaLike>): SchemaLike;
+  array(item: SchemaLike): SchemaLike;
+  string(): SchemaLike;
+  number(): SchemaLike;
+  boolean(): SchemaLike;
+}
+
+/** One block of an `AgentToolResult`. Only the text shape is produced here. */
+export interface ToolResultBlock {
+  type: "text";
+  text: string;
+}
+
+export interface ToolResult {
+  content: ToolResultBlock[];
+  details?: unknown;
+  isError?: boolean;
+}
+
+/**
+ * `ctx` passed to a registered tool's `execute`. `invokeTool` runs the *native*
+ * built-in that this tool shadows, and is absent when no built-in of that name
+ * exists — `ask.enabled: false`, or a session with no prompt surface.
+ */
+export interface ToolCtx {
+  invokeTool?(
+    params: Record<string, unknown>,
+    options?: { signal?: AbortSignal; onUpdate?: (update: unknown) => void },
+  ): Promise<ToolResult>;
+}
+
+export interface ToolDefinitionLike {
+  name: string;
+  label?: string;
+  description: string;
+  parameters: SchemaLike;
+  strict?: boolean;
+  approval?: "read" | "write" | "exec";
+  concurrency?: "exclusive" | "shared";
+  execute(
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    onUpdate: ((update: unknown) => void) | undefined,
+    ctx: ToolCtx,
+  ): Promise<ToolResult>;
+}
+
 export interface PiLike {
   on<E = unknown>(event: string, handler: (event: E, ctx: HookCtx) => unknown): void;
   registerCommand(
@@ -38,6 +93,10 @@ export interface PiLike {
     options?: { deliverAs?: "steer" | "followUp" | "aside"; attribution?: "user" | "agent" },
   ): unknown;
   getSessionName?(): string | undefined;
+  /** Absent on hosts predating extension tool registration. */
+  registerTool?(definition: ToolDefinitionLike): unknown;
+  /** Schema builder for a registered tool's `parameters`. */
+  zod?: ZodLike;
 }
 
 /** `pi.exec` resolves to a string or a result object depending on host version. */
