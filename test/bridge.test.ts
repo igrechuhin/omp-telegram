@@ -434,7 +434,9 @@ describe("telegram bridge", () => {
     expect(body?.parse_mode).toBe("HTML");
     // A t.me link would otherwise pull a preview card onto every status reply.
     expect(body?.link_preview_options).toEqual({ is_disabled: true });
-    expect(sends("getChat")).not.toHaveLength(0);
+    // Pin the REQUEST, not just that some getChat happened: resolving the wrong id would still
+    // produce a link, just to the wrong person.
+    expect(sends("getChat").map((c) => c.body.chat_id)).toEqual([ALLOWED]);
   });
 
   test("leadership hands off on shutdown; replies to ended sessions are refused", async () => {

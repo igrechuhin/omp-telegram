@@ -1,6 +1,6 @@
 {
   "name": "omp-telegram",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "Telegram bridge for omp sessions: structured stop report, reply-to-continue, ask-as-buttons.",
