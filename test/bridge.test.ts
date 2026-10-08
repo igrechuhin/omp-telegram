@@ -60,6 +60,11 @@ function pendingFrom(offset: number): Record<string, unknown>[] {
   return queue.filter((u) => typeof u.update_id === "number" && u.update_id >= offset);
 }
 
+/** `getChat` replies keyed by user id, for `/status`'s name resolution. */
+const CHAT_FIXTURES: Record<number, Record<string, unknown>> = {
+  [ALLOWED]: { id: ALLOWED, username: "iv_an", first_name: "Ivan" },
+};
+
 const server = Bun.serve({
   port: 0,
   idleTimeout: 0,
@@ -99,6 +104,18 @@ const server = Bun.serve({
     if (method === "sendMessage" || method === "sendDocument") {
       lastMessageId++;
       return Response.json({ ok: true, result: { message_id: lastMessageId, chat: { id: CHAT } } });
+    }
+    if (method === "getChat") {
+      // `/status` resolves each allowed id to a display name through this call. Ids without a
+      // fixture answer the way Telegram does for a chat the bot has never seen.
+      const chat = CHAT_FIXTURES[Number(body.chat_id)];
+      if (!chat) {
+        return Response.json(
+          { ok: false, error_code: 400, description: "Bad Request: chat not found" },
+          { status: 400 },
+        );
+      }
+      return Response.json({ ok: true, result: chat });
     }
     return Response.json({ ok: true, result: true });
   },
@@ -406,6 +423,20 @@ describe("telegram bridge", () => {
     expect(a.shutdowns).toBe(1);
   });
 
+  test("/status names each allowed user with a tappable link", async () => {
+    reply(13, undefined, "/status");
+    await polledPast(14);
+    const body = sends().at(-1)?.body;
+    const text = typeof body?.text === "string" ? body.text : "";
+    // The id alone names nobody and cannot be tapped; the resolved username must carry a link.
+    expect(text).toContain('👤 allowed users: <a href="https://t.me/iv_an">@iv_an</a>');
+    expect(text).not.toContain(`allowed users: ${ALLOWED}`);
+    expect(body?.parse_mode).toBe("HTML");
+    // A t.me link would otherwise pull a preview card onto every status reply.
+    expect(body?.link_preview_options).toEqual({ is_disabled: true });
+    expect(sends("getChat")).not.toHaveLength(0);
+  });
+
   test("leadership hands off on shutdown; replies to ended sessions are refused", async () => {
     b = makeSession("sessB");
     await emit(b, "session_start");
@@ -416,8 +447,8 @@ describe("telegram bridge", () => {
     b.timers[0]();
     expect(readLeader()?.sessionId).toBe("sessB");
 
-    reply(13, notificationId, "are you there?");
-    await polledPast(14);
+    reply(15, notificationId, "are you there?");
+    await polledPast(16);
     expect(lastSendText()).toContain("That session has ended.");
   });
 

@@ -35,7 +35,7 @@ import {
   writeAway,
   writeOffset,
 } from "./state";
-import { api, esc, logTgFailure } from "./tg";
+import { api, esc, logTgFailure, userLink } from "./tg";
 import type { HookCtx, PiLike } from "./types";
 
 const TICK_MS = 5_000;
@@ -83,6 +83,9 @@ export default function telegram(pi: PiLike): void {
         chat_id: chatId,
         text,
         parse_mode: "HTML",
+        // `/status` now renders user links; without this a t.me link drags a preview card onto
+        // every reply. Same choice notify.ts already makes.
+        link_preview_options: { is_disabled: true },
         ...(replyTo !== undefined ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
       }),
     );
@@ -108,21 +111,53 @@ export default function telegram(pi: PiLike): void {
         return true;
       }
       if (cmd === "/status" || cmd === "/start") {
-        await reply(chatId, statusText());
+        await reply(chatId, await statusText());
         return true;
       }
       return false;
     },
   };
 
-  function statusText(): string {
+  /**
+   * Resolved `id -> rendered label` cache. A username is stable enough that re-resolving it on
+   * every `/status` would just spend API calls, but a FAILED lookup is not cached: the usual cause
+   * is a transient network error, and caching it would pin the bare id until omp restarts.
+   */
+  const userLabels = new Map<number, string>();
+
+  /**
+   * A numeric id in the status is unactionable — you cannot tell whose it is, and it is not
+   * tappable. `getChat` turns it into a username, rendered as a real link.
+   *
+   * Falls back to the bare id when the lookup fails, which is the honest answer: the id IS what
+   * is configured, and a status command must not die because one name could not be resolved.
+   */
+  async function userLabel(id: number): Promise<string> {
+    const cached = userLabels.get(id);
+    if (cached) return cached;
+    if (!cfg) return String(id);
+    const res = await api(cfg.botToken, "getChat", { chat_id: id }, 5_000);
+    if (!res.ok) {
+      logTgFailure(`getChat ${id}`, res);
+      return String(id);
+    }
+    const label = userLink(id, res.result);
+    userLabels.set(id, label);
+    return label;
+  }
+
+  async function statusText(): Promise<string> {
     const holder = readLeader();
+    const ids = cfg?.allowedUserIds ?? [];
+    const users = ids.length
+      ? (await Promise.all(ids.map(userLabel))).join(", ")
+      : "none (replies ignored)";
     return [
       `🤖 <b>${esc(machineName(cfg))}</b>`,
       `🌙 away: ${readAway() ? "on" : "off"}`,
       `⏱ escalate: ${cfg?.askEscalateMs ? `${Math.round(cfg.askEscalateMs / 1000)}s` : "off"}`,
       `📡 poller: ${holder ? `pid ${holder.pid}` : "none"}`,
-      `👤 allowed users: ${cfg?.allowedUserIds.join(", ") || "none (replies ignored)"}`,
+      `👤 allowed users: ${users}`,
     ].join("\n");
   }
 
@@ -482,7 +517,8 @@ export default function telegram(pi: PiLike): void {
         : readLeader()
           ? `another session (pid ${readLeader()?.pid})`
           : "none — restart omp if this persists";
-      say(`${statusText().replace(/<[^>]+>/g, "")}\nrelay: ${relay ? "on" : "off"} · poller: ${poller}`);
+      const status = (await statusText()).replace(/<[^>]+>/g, "");
+      say(`${status}\nrelay: ${relay ? "on" : "off"} · poller: ${poller}`);
     },
   });
 }

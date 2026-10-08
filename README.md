@@ -75,7 +75,7 @@ bun scripts/setup.ts --token 123:ABC --chat -1001234567890 --user 4242 --machine
 | Telegram | Reply to a notification | Continues that session |
 | Telegram | Message with no reply (private chat only) | Goes to the newest live session |
 | Telegram | `/away [on\|off]` | Toggles away mode for the whole machine |
-| Telegram | `/status` | Machine, away state, poller, allowed users |
+| Telegram | `/status` | Machine, away state, poller, allowed users — each resolved to a linked `@username` |
 | Telegram | Reply `/exit` to a notification | Ends that session. A bare `/exit` is refused, so the wrong session can't be ended. |
 | omp | `/telegram away [on\|off]` | Same toggle, from the terminal |
 | omp | `/telegram escalate <seconds\|off>` | Relays an `ask` left unanswered for that long. `off` disables it. |
@@ -114,8 +114,9 @@ away flag, and `err.log`.
   as a credential.
 - Setup never adopts an id silently: it prints who sent the `/start` and asks you to
   confirm, because in a shared group anyone could send one first.
-- Check the current list any time with `/telegram status`, or read
-  `allowedUserIds` in `~/.omp/agent/telegram/config.json`.
+- Check the current list any time with `/telegram status`, which resolves each id to a
+  username, or read `allowedUserIds` in `~/.omp/agent/telegram/config.json`. An id that
+  cannot be resolved is shown as the bare number.
 - Unauthorized senders get **no reply at all** — the drop is written to `err.log`, so
   the bot never confirms to a stranger that it is listening.
 - The token is never written to `err.log`.

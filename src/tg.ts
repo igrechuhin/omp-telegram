@@ -46,6 +46,23 @@ export function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Renders a user as a tappable link for HTML parse mode.
+ *
+ * A username gets a `t.me` link, which resolves for anyone. Without one, `tg://user?id=` is the
+ * only form Telegram will open, and it needs a display name — falling back to the id when even
+ * that is missing, so the link is never blank.
+ */
+export function userLink(id: number, chat: unknown): string {
+  // Reuse `asUser` rather than casting: `getChat` hands back `unknown`, and a shape change should
+  // degrade to the id link instead of interpolating `undefined` into the label.
+  const user = asUser({ id, ...(isRecord(chat) ? chat : {}) });
+  const name = [user?.first_name, user?.last_name].filter(Boolean).join(" ");
+  return user?.username
+    ? `<a href="https://t.me/${encodeURIComponent(user.username)}">@${esc(user.username)}</a>`
+    : `<a href="tg://user?id=${id}">${esc(name || String(id))}</a>`;
+}
+
 /** Strips the bot token out of anything destined for a log line. */
 export function redact(text: string, token: string): string {
   return token ? text.split(token).join("<token>") : text;
